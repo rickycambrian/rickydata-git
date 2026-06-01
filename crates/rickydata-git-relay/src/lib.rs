@@ -1,5 +1,7 @@
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Request, State};
 use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -204,6 +206,65 @@ pub fn router(store: impl RelayStore + 'static) -> Router {
         .with_state(RelayState {
             store: Arc::new(store),
         })
+}
+
+/// Build the relay router with an optional bearer-token gate.
+///
+/// The relay is the *secondary* cross-fleet channel (the primary is a shared
+/// private git repo over `sync push/pull`). When `auth_token` is `Some`, every
+/// route except `/health` requires `Authorization: Bearer <token>`; mismatch or
+/// absence returns 401. When `None`, the relay is open (back-compat for
+/// local/dev use) — callers should warn loudly in that case.
+pub fn router_with_auth(store: impl RelayStore + 'static, auth_token: Option<String>) -> Router {
+    router(store).layer(axum::middleware::from_fn_with_state(
+        AuthConfig { token: auth_token },
+        require_bearer_auth,
+    ))
+}
+
+#[derive(Clone)]
+struct AuthConfig {
+    token: Option<String>,
+}
+
+async fn require_bearer_auth(
+    State(config): State<AuthConfig>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AuthError> {
+    // Auth disabled when no token is configured (open relay).
+    let Some(expected) = config.token.as_ref() else {
+        return Ok(next.run(request).await);
+    };
+    // Liveness probes must always reach `/health` unauthenticated.
+    if request.uri().path() == "/health" {
+        return Ok(next.run(request).await);
+    }
+    let provided = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    match provided {
+        Some(token) if token == expected => Ok(next.run(request).await),
+        _ => Err(AuthError),
+    }
+}
+
+#[derive(Debug)]
+pub struct AuthError;
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(RelayErrorReport {
+                status: "error".to_string(),
+                message: "missing or invalid bearer token".to_string(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 async fn health() -> Json<HealthReport> {
@@ -2658,5 +2719,60 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let error: RelayErrorReport = json_response(response).await;
         assert!(error.message.contains("does not match path repo_id"));
+    }
+
+    fn status_request(token: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/repos/repo/status");
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_disabled_when_no_token_configured() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = router_with_auth(FileRelayStore::new(temp.path()), None);
+        let response = app.oneshot(status_request(None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_accepts_correct_bearer_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = router_with_auth(FileRelayStore::new(temp.path()), Some("s3cr3t".to_string()));
+        let response = app.oneshot(status_request(Some("s3cr3t"))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_missing_or_wrong_bearer_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = router_with_auth(FileRelayStore::new(temp.path()), Some("s3cr3t".to_string()));
+        let missing = app.clone().oneshot(status_request(None)).await.unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let wrong = app.oneshot(status_request(Some("nope"))).await.unwrap();
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_always_allows_health_unauthenticated() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = router_with_auth(FileRelayStore::new(temp.path()), Some("s3cr3t".to_string()));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let report: HealthReport = json_response(response).await;
+        assert_eq!(report.status, "ok");
     }
 }

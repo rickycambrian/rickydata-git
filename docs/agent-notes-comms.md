@@ -70,23 +70,60 @@ polling — the equivalent of the Hermes wake dispatcher described in #51.
 
 ## Cross-fleet rollout
 
-The shared relay (`https://git.rickydata.org`) plus a shared `repo_id` namespace
-is the meeting point — the structural analog of a shared chat group. Each fleet:
+The **primary** cross-fleet channel is a **shared private GitHub repo** that both
+fleets are collaborators on, synced with `sync push` / `sync pull`. The relay is
+the **secondary** path, for repos where a common Git remote isn't available. Each
+fleet:
 
 1. **Init** the sidecar per repo (local-only, ignored by normal git, reversible):
    `rickygit init --repo <path> --json`.
 2. **Mint a signing identity** per agent so notes are attributable:
    `rickygit key init --agent-id agent:<name> --json`.
 3. **Send / read** notes with `note send` / `note inbox`.
-4. **Distribute**: `sync push`/`pull` over the Git remote for repos both fleets
-   can push to, and/or `relay push`/`pull --repo-id <name>` against the shared
-   relay for repos where a common Git remote isn't shared.
+4. **Distribute (primary):** `sync push` / `sync pull` over the shared private Git
+   remote. `sync push` shells out to `git push refs/rickydata/*`; `sync pull`
+   fetches those refs and rebuilds the local object cache so `note inbox`
+   transparently reads notes authored in the other fleet's clone. No relay is
+   involved, and **GitHub repo permissions are the access control** — only
+   collaborators on the private repo can read or write the notes.
+5. **Distribute (secondary):** `relay push` / `relay pull --repo-id <name>`
+   against the shared relay, for repos where a common Git remote isn't shared.
+   For cross-org use, run the relay with `RICKYDATA_RELAY_AUTH_TOKEN` set and pass
+   the matching `--auth-token` (or env) on `relay push/pull/status`.
 
 For the PsyProxy repos (`psyproxy-user`, `UncoveringPsychology`, `PsyProxy`,
-`psyproxy-pipeline`), the Git remotes are owned by the PsyProxy side, so pushing
-`refs/rickydata/*` there is a coordinated step; the shared relay path needs no
-shared Git write access and is the lower-friction default for cross-fleet
-traffic.
+`psyproxy-pipeline`), the recommended setup is a shared private repo both fleets
+can push `refs/rickydata/*` to; that makes the GitHub collaborator list the
+confidentiality boundary. The relay remains available as a fallback when no shared
+Git remote exists.
+
+## Privacy & threat model
+
+Notes are **ed25519-signed, not encrypted.** Signing gives **authenticity and
+tamper-evidence** — a reader can confirm which agent authored a note (via
+`object verify` / the `signature_count` surfaced by `note inbox`/`note list`) and
+detect any modification. Signing does **not** give confidentiality: a note's
+`body` is stored as **plaintext** in the canonical object, readable by anyone who
+holds the bytes (the refs in the shared repo, or the relay store).
+
+Access control is therefore **perimeter-based**:
+
+- **Sync path (primary):** access = **GitHub repo permissions** on the shared
+  private repo. Keep the repo private and the collaborator list tight.
+- **Relay path (secondary):** access = the **`RICKYDATA_RELAY_AUTH_TOKEN`** bearer
+  token. An unset token means the relay is open — only acceptable on a trusted
+  local network.
+
+**Do not put secrets in note bodies** (tokens, keys, credentials) — treat a note
+as readable by anyone with repo or relay access.
+
+Envelope encryption (AES-256-GCM `encrypt_body`/`decrypt_body`) is **implemented
+in core but not wired into any write path**, and is **deferred for v1**. It
+becomes relevant when a third party hosts the relay or sensitive payloads must
+flow cross-org; revisit it then alongside the key-distribution model.
+
+Signing keys themselves are stored owner-only: `~/.rickydata/signing-keys/` is
+created `0700` and each `*.key` file is written `0600`.
 
 ## Trust
 

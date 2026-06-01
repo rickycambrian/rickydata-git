@@ -823,6 +823,9 @@ struct RelayPushArgs {
     idempotency_key: Option<String>,
     #[arg(long, default_value_t = 20)]
     chunk_size: usize,
+    /// Bearer token for an auth-gated relay (or set RICKYDATA_RELAY_AUTH_TOKEN).
+    #[arg(long = "auth-token")]
+    auth_token: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -837,6 +840,9 @@ struct RelayPullArgs {
     repo_id: Option<String>,
     #[arg(long)]
     limit: Option<usize>,
+    /// Bearer token for an auth-gated relay (or set RICKYDATA_RELAY_AUTH_TOKEN).
+    #[arg(long = "auth-token")]
+    auth_token: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -849,6 +855,9 @@ struct RelayStatusArgs {
     url: String,
     #[arg(long)]
     repo_id: Option<String>,
+    /// Bearer token for an auth-gated relay (or set RICKYDATA_RELAY_AUTH_TOKEN).
+    #[arg(long = "auth-token")]
+    auth_token: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -1088,6 +1097,15 @@ fn run_key(command: KeySubcommand) -> Result<()> {
                 std::fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create key directory {}", parent.display())
                 })?;
+                // The signing-keys directory holds long-lived secrets: owner-only (0700).
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                        .with_context(|| {
+                            format!("failed to chmod 700 key directory {}", parent.display())
+                        })?;
+                }
             }
             let key = generate_signing_keypair();
             save_signing_key_to_file(&key, &key_path)
@@ -3034,7 +3052,10 @@ fn run_proof(args: ProofArgs) -> Result<()> {
         None => None,
     };
     let relay = match (args.relay_url, repo_id.as_ref()) {
-        (Some(url), Some(repo_id)) => Some(build_relay_status(&args.repo, &url, repo_id)?),
+        (Some(url), Some(repo_id)) => {
+            // Proof path resolves the relay token from RICKYDATA_RELAY_AUTH_TOKEN.
+            Some(build_relay_status(&args.repo, &url, repo_id, None)?)
+        }
         _ => None,
     };
     let kfdb = match (args.kfdb_url, repo_id.as_ref()) {
@@ -3146,15 +3167,17 @@ fn run_relay(command: RelaySubcommand) -> Result<()> {
                     idempotency_key: chunk_idempotency_key,
                     objects: chunk.to_vec(),
                 };
-                let report: BundlePushReport = client
-                    .post(relay_url(&args.url, &repo_id, "bundles/push")?)
-                    .json(&request)
-                    .send()
-                    .context("failed to push bundle to relay")?
-                    .error_for_status()
-                    .context("relay rejected bundle push")?
-                    .json()
-                    .context("failed to parse relay bundle push response")?;
+                let report: BundlePushReport = with_relay_auth(
+                    client.post(relay_url(&args.url, &repo_id, "bundles/push")?),
+                    args.auth_token.as_deref(),
+                )
+                .json(&request)
+                .send()
+                .context("failed to push bundle to relay")?
+                .error_for_status()
+                .context("relay rejected bundle push")?
+                .json()
+                .context("failed to parse relay bundle push response")?;
                 accepted_object_count += report.accepted_object_count;
                 duplicate_object_count += report.duplicate_object_count;
                 pushed_object_ids.extend(report.object_ids);
@@ -3182,15 +3205,17 @@ fn run_relay(command: RelaySubcommand) -> Result<()> {
                 known_object_ids,
                 limit: args.limit,
             };
-            let report: BundlePullReport = relay_client()?
-                .post(relay_url(&args.url, &repo_id, "bundles/pull")?)
-                .json(&request)
-                .send()
-                .context("failed to pull bundle from relay")?
-                .error_for_status()
-                .context("relay rejected bundle pull")?
-                .json()
-                .context("failed to parse relay bundle pull response")?;
+            let report: BundlePullReport = with_relay_auth(
+                relay_client()?.post(relay_url(&args.url, &repo_id, "bundles/pull")?),
+                args.auth_token.as_deref(),
+            )
+            .json(&request)
+            .send()
+            .context("failed to pull bundle from relay")?
+            .error_for_status()
+            .context("relay rejected bundle pull")?
+            .json()
+            .context("failed to parse relay bundle pull response")?;
             let mut written_object_count = 0;
             let mut duplicate_object_count = 0;
             let mut object_ids = Vec::new();
@@ -3216,7 +3241,12 @@ fn run_relay(command: RelaySubcommand) -> Result<()> {
         }
         RelaySubcommand::Status(args) => {
             let repo_id = relay_repo_id(&args.repo, args.repo_id)?;
-            print_json(&build_relay_status(&args.repo, &args.url, &repo_id)?)
+            print_json(&build_relay_status(
+                &args.repo,
+                &args.url,
+                &repo_id,
+                args.auth_token.as_deref(),
+            )?)
         }
     }
 }
@@ -4116,16 +4146,23 @@ fn graph_property_value(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn build_relay_status(repo: &Path, url: &str, repo_id: &str) -> Result<RelayStatusCliReport> {
+fn build_relay_status(
+    repo: &Path,
+    url: &str,
+    repo_id: &str,
+    auth_token: Option<&str>,
+) -> Result<RelayStatusCliReport> {
     let local_object_count = rickydata_git_git::list_ref_backed_objects(repo, None)?.len();
-    let report: RepoRelayStatusReport = relay_client()?
-        .get(relay_url(url, repo_id, "status")?)
-        .send()
-        .context("failed to fetch relay status")?
-        .error_for_status()
-        .context("relay rejected status request")?
-        .json()
-        .context("failed to parse relay status response")?;
+    let report: RepoRelayStatusReport = with_relay_auth(
+        relay_client()?.get(relay_url(url, repo_id, "status")?),
+        auth_token,
+    )
+    .send()
+    .context("failed to fetch relay status")?
+    .error_for_status()
+    .context("relay rejected status request")?
+    .json()
+    .context("failed to parse relay status response")?;
     let status = if local_object_count == report.object_count {
         "ok"
     } else {
@@ -4254,6 +4291,29 @@ fn relay_client() -> Result<reqwest::blocking::Client> {
         .timeout(Duration::from_secs(180))
         .build()
         .context("failed to build relay HTTP client")
+}
+
+/// Resolve the optional relay bearer token from an explicit `--auth-token` flag,
+/// falling back to the `RICKYDATA_RELAY_AUTH_TOKEN` env var. Empty values are
+/// treated as unset. The relay only enforces this when it was started with the
+/// same token; otherwise it is ignored (open relay).
+fn relay_auth_token(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("RICKYDATA_RELAY_AUTH_TOKEN").ok())
+        .filter(|token| !token.is_empty())
+}
+
+/// Attach `Authorization: Bearer <token>` to a relay request when a token is
+/// configured (mirrors the `HttpKfdbIndexSink` bearer pattern).
+fn with_relay_auth(
+    builder: reqwest::blocking::RequestBuilder,
+    explicit: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    match relay_auth_token(explicit) {
+        Some(token) => builder.bearer_auth(token),
+        None => builder,
+    }
 }
 
 fn resolve_tee_url(explicit: Option<&str>) -> Option<String> {

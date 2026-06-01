@@ -1,6 +1,6 @@
 use rickydata_git_relay::{
     FileRelayStore, GcsAuth, GcsRelayStore, HttpKfdbIndexSink, IndexedRelayStore, KfdbPrivateAuth,
-    router,
+    router_with_auth,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -12,6 +12,19 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| PathBuf::from(".rickydata-relay"));
     let addr = relay_addr_from_env()?.parse::<SocketAddr>()?;
 
+    // Optional bearer-token gate. The relay is the secondary cross-fleet channel
+    // (the primary is a shared private git repo); when used cross-org, set
+    // RICKYDATA_RELAY_AUTH_TOKEN so every route except /health requires the token.
+    let auth_token = std::env::var("RICKYDATA_RELAY_AUTH_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
+    if auth_token.is_none() {
+        eprintln!(
+            "WARNING: RICKYDATA_RELAY_AUTH_TOKEN is unset — the relay is OPEN (no auth). \
+             Set it to require Authorization: Bearer <token> on all routes except /health."
+        );
+    }
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let file_store = FileRelayStore::new(store_dir);
     if let Some(kfdb_url) = std::env::var_os("RICKYDATA_RELAY_KFDB_URL") {
@@ -20,18 +33,26 @@ async fn main() -> anyhow::Result<()> {
         let index_sink = HttpKfdbIndexSink::new(kfdb_url.to_string_lossy(), token, private_auth)?;
         if let Some(bucket) = std::env::var_os("RICKYDATA_RELAY_GCS_BUCKET") {
             let store = gcs_store(bucket.to_string_lossy())?;
-            axum::serve(listener, router(IndexedRelayStore::new(store, index_sink))).await?;
+            axum::serve(
+                listener,
+                router_with_auth(IndexedRelayStore::new(store, index_sink), auth_token),
+            )
+            .await?;
         } else {
             axum::serve(
                 listener,
-                router(IndexedRelayStore::new(file_store, index_sink)),
+                router_with_auth(IndexedRelayStore::new(file_store, index_sink), auth_token),
             )
             .await?;
         }
     } else if let Some(bucket) = std::env::var_os("RICKYDATA_RELAY_GCS_BUCKET") {
-        axum::serve(listener, router(gcs_store(bucket.to_string_lossy())?)).await?;
+        axum::serve(
+            listener,
+            router_with_auth(gcs_store(bucket.to_string_lossy())?, auth_token),
+        )
+        .await?;
     } else {
-        axum::serve(listener, router(file_store)).await?;
+        axum::serve(listener, router_with_auth(file_store, auth_token)).await?;
     }
     Ok(())
 }

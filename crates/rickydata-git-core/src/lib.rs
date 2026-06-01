@@ -348,6 +348,15 @@ pub fn save_signing_key_to_file(key: &SigningKey, path: &Path) -> Result<(), Cor
         .map_err(|err| CoreError::Signing(format!("failed to create signing key file: {err}")))?;
     file.write_all(&bytes)
         .map_err(|err| CoreError::Signing(format!("failed to write signing key: {err}")))?;
+    // A signing key is a long-lived secret: restrict it to owner read/write only.
+    // This is the single chokepoint for both `key generate` and `key init`.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
+            CoreError::Signing(format!("failed to chmod 600 signing key file: {err}"))
+        })?;
+    }
     Ok(())
 }
 
@@ -741,6 +750,23 @@ mod tests {
         save_signing_key_to_file(&key, &path).unwrap();
         let loaded = load_signing_key_from_file(&path).unwrap();
         assert_eq!(key.to_bytes(), loaded.to_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_key_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.bin");
+        let key = generate_signing_keypair();
+        save_signing_key_to_file(&key, &path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "signing key file must be -rw------- (0o600), got {:o}",
+            mode & 0o777
+        );
     }
 
     #[test]
