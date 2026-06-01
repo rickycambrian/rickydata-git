@@ -1,0 +1,39 @@
+[package]
+name = "rickydata-git-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rickygit"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+rickydata-git-agent = { path = "../rickydata-git-agent" }
+rickydata-git-core = { path = "../rickydata-git-core" }
+rickydata-git-git = { path = "../rickydata-git-git" }
+rickydata-git-rdl = { path = "../rickydata-git-rdl" }
+rickydata-git-relay = { path = "../rickydata-git-relay" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+
+[features]
+# The TEE signer client lives in a separate repository and is not bundled
+# in this public mirror. `tee` is declared so the cfg is recognized; it is
+# off by default and wires in no dependency here.
+default = []
+tee = []
+[dev-dependencies]
+assert_cmd.workspace = true
+axum.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

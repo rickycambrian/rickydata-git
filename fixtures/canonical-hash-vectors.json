@@ -1,0 +1,58 @@
+{
+  "vectors": [
+    {
+      "name": "object-key-order",
+      "kind": "example.object",
+      "schema_version": "rickydata.git.v1",
+      "body": {
+        "b": 2,
+        "a": {
+          "z": true,
+          "m": [
+            3,
+            2,
+            1
+          ]
+        }
+      },
+      "canonical_body_json": "{\"a\":{\"m\":[3,2,1],\"z\":true},\"b\":2}",
+      "body_hash": "sha256:4553b6af1b3fa653183d00ef5cc95be1141e22a9cdc6dabed1266f7c902696a8",
+      "object_id": "sha256:df33e1cc18ba455b88ee5198702481a43595c65ebb45354010d83ce16a47bb0c"
+    },
+    {
+      "name": "work-intent-valid",
+      "kind": "agent.intent",
+      "schema_version": "rickydata.git.v1",
+      "body": {
+        "objective": "Initialize rickydata_git with repo-native agent collaboration schemas.",
+        "issue_refs": [
+          {
+            "platform": "github",
+            "repository": "rickycambrian/rickydata-git",
+            "id": "bootstrap-agent-native-git",
+            "url": null
+          }
+        ],
+        "task_refs": [
+          {
+            "system": "local-planning",
+            "id": "initialize-foundation",
+            "title": "Create the first typed, JSON-first foundation"
+          }
+        ],
+        "base_commit": null,
+        "allowed_capabilities": [
+          "GitRead",
+          "TraceWrite"
+        ],
+        "privacy": "public_metadata",
+        "tee_policy": null,
+        "release_guard": null,
+        "created_by": "human:maintainer"
+      },
+      "canonical_body_json": "{\"allowed_capabilities\":[\"GitRead\",\"TraceWrite\"],\"base_commit\":null,\"created_by\":\"human:maintainer\",\"issue_refs\":[{\"id\":\"bootstrap-agent-native-git\",\"platform\":\"github\",\"repository\":\"rickycambrian/rickydata-git\",\"url\":null}],\"objective\":\"Initialize rickydata_git with repo-native agent collaboration schemas.\",\"privacy\":\"public_metadata\",\"release_guard\":null,\"task_refs\":[{\"id\":\"initialize-foundation\",\"system\":\"local-planning\",\"title\":\"Create the first typed, JSON-first foundation\"}],\"tee_policy\":null}",
+      "body_hash": "sha256:74a162cc86496b8ff513f8e146bf0b72d7abe3ba8632fea0fb1a541d9dc11198",
+      "object_id": "sha256:a0c9cd2e0309cc8d965aebc13c2d8acf09b4b1df507b8e83374f0e1a538ff071"
+    }
+  ]
+}

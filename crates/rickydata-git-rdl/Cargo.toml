@@ -1,0 +1,15 @@
+[package]
+name = "rickydata-git-rdl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rdl-core.workspace = true
+rickydata-git-agent = { path = "../rickydata-git-agent" }
+rickydata-git-core = { path = "../rickydata-git-core" }
+rickydata-git-git = { path = "../rickydata-git-git" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true

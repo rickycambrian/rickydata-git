@@ -1,0 +1,27 @@
+{
+  "objective": "Initialize rickydata_git with repo-native agent collaboration schemas.",
+  "issue_refs": [
+    {
+      "platform": "github",
+      "repository": "rickycambrian/rickydata-git",
+      "id": "bootstrap-agent-native-git",
+      "url": null
+    }
+  ],
+  "task_refs": [
+    {
+      "system": "local-planning",
+      "id": "initialize-foundation",
+      "title": "Create the first typed, JSON-first foundation"
+    }
+  ],
+  "base_commit": null,
+  "allowed_capabilities": [
+    "GitRead",
+    "TraceWrite"
+  ],
+  "privacy": "public_metadata",
+  "tee_policy": null,
+  "release_guard": null,
+  "created_by": "human:maintainer"
+}

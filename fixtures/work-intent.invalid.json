@@ -1,0 +1,11 @@
+{
+  "objective": "",
+  "issue_refs": [],
+  "task_refs": [],
+  "base_commit": "not-a-git-object",
+  "allowed_capabilities": [],
+  "privacy": "public_metadata",
+  "tee_policy": null,
+  "release_guard": null,
+  "created_by": null
+}
